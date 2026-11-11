@@ -25,25 +25,32 @@ protocol's constant, and approached only by invalid code built to
 pump demands around a recursive cycle (see native-cost/ for the measured
 costs).
 
+Validation is a pure function of the code and the stack limit, so the
+results are memoised on those two: validating the same code again
+returns the answer already computed rather than walking it a second
+time.  The key is the code's content, not the object holding it, so an
+equal bytearray and bytes reach the same entry.  Call clear_cache()
+to drop the memo — the benchmarks do, so that they time the traversal
+and not a cache hit.
+
 Opcodes: CALLDEST=0xBB, CALLSUB=0xBC, RETURNSUB=0xBF.
 """
 from collections import defaultdict, deque
+from functools import lru_cache
 
 from opcodes import (JUMP, JUMPI, JUMPDEST, CALLSUB, CALLDEST, RETURNSUB,
                      PUSH0, PUSH32, opcode_info, push_value)
 
 STACK_LIMIT = 1024
+CACHE_SIZE = 128      # how many validated codes the memo keeps
 OUTER = None          # stands for the entry of top-level code
 LABEL = "label"       # destination must be a JUMPDEST or a CALLDEST
 ENTRY = "calldest"    # destination must be a CALLDEST
 
 
-def validate(code, stack_limit=STACK_LIMIT):
-    """True iff the code satisfies the five constraints of EIP-8337
-    validation: valid opcodes, proven destinations, one static stack
-    offset per instruction, framed returns, and no underflow.
-    Framing is a property of entries: no entry reachable by jumps from
-    the top level may contain a RETURNSUB."""
+def _validate_uncached(code, stack_limit):
+    """The validation itself, always walking the code.  validate() is
+    the entry point: it answers from the memo when it can."""
     if len(code) == 0:
         return False
 
@@ -206,3 +213,28 @@ def validate(code, stack_limit=STACK_LIMIT):
 
     # Top-level code has no caller to take items from.
     return inputs[OUTER] == 0
+
+
+_validate_cached = lru_cache(maxsize=CACHE_SIZE)(_validate_uncached)
+
+
+def validate(code, stack_limit=STACK_LIMIT):
+    """True iff the code satisfies the five constraints of EIP-8337
+    validation: valid opcodes, proven destinations, one static stack
+    offset per instruction, framed returns, and no underflow.
+    Framing is a property of entries: no entry reachable by jumps from
+    the top level may contain a RETURNSUB.
+    The answer is memoised on the code's content and the stack limit;
+    bytes() makes that content the key, whatever buffer it arrived in."""
+    return _validate_cached(bytes(code), stack_limit)
+
+
+def clear_cache():
+    """Forget every memoised result, so the next validate() walks the
+    code again.  Timing runs call this before each measurement."""
+    _validate_cached.cache_clear()
+
+
+def cache_info():
+    """The memo's hits, misses and size, as functools reports them."""
+    return _validate_cached.cache_info()

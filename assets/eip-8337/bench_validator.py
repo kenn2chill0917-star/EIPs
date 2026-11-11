@@ -42,6 +42,7 @@ BENCHES = [
 if __name__ == "__main__":
     print(f"{'shape':36s} {'bytes':>6s} {'minimal':>10s} {'bounds-proving':>15s}")
     for name, code in BENCHES:
+        mv.clear_cache()                 # time the traversal, not a cache hit
         t = time.perf_counter()
         rm = mv.validate(code)
         dm = (time.perf_counter() - t) * 1e6 / len(code)
